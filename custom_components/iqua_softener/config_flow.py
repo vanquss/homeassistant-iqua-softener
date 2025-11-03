@@ -42,7 +42,7 @@ class IquaSoftenerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry):
-        return IquaSoftenerOptionsFlowHandler(config_entry)
+        return IquaSoftenerOptionsFlowHandler()
 
 
 class IquaSoftenerOptionsFlowHandler(config_entries.OptionsFlow):
