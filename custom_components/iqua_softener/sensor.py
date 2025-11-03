@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import (
@@ -175,6 +175,7 @@ class IquaSoftenerSensor(SensorEntity, CoordinatorEntity, ABC):
         entity_description: SensorEntityDescription = None,
     ):
         super().__init__(coordinator)
+        self._device_serial_number = device_serial_number
         self._attr_unique_id = (
             f"{device_serial_number}_{entity_description.key}".lower()
         )
@@ -186,6 +187,16 @@ class IquaSoftenerSensor(SensorEntity, CoordinatorEntity, ABC):
     def _handle_coordinator_update(self) -> None:
         self.update(self.coordinator.data)
         self.async_write_ha_state()
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information."""
+        return {
+            "identifiers": {(DOMAIN, self._device_serial_number)},
+            "name": f"Iqua Softener {self._device_serial_number}",
+            "manufacturer": "Iqua",
+            "model": "Water Softener",
+        }
 
     @abstractmethod
     def update(self, data: IquaSoftenerData): ...
