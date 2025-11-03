@@ -43,12 +43,7 @@ async def async_setup_entry(
     hass_data["coordinator"] = coordinator
     hass.data[DOMAIN][entry.entry_id] = hass_data
 
-    hass.async_create_task(
-        hass.config_entries.async_forward_entry_setup(entry, "sensor")
-    )
-    hass.async_create_task(
-        hass.config_entries.async_forward_entry_setup(entry, "switch")
-    )
+    await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "switch"])
     return True
 
 
@@ -61,9 +56,8 @@ async def options_update_listener(
 async def async_unload_entry(
     hass: core.HomeAssistant, entry: config_entries.ConfigEntry
 ) -> bool:
-    unload_ok = await hass.config_entries.async_forward_entry_unload(entry, "sensor")
-    unload_ok = unload_ok and await hass.config_entries.async_forward_entry_unload(
-        entry, "switch"
+    unload_ok = await hass.config_entries.async_unload_platforms(
+        entry, ["sensor", "switch"]
     )
 
     hass.data[DOMAIN][entry.entry_id]["unsub_options_update_listener"]()
