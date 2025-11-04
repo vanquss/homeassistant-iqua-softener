@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 import logging
+import time
 from typing import Optional, Any
 import asyncio
 import aiohttp
@@ -172,6 +173,9 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         self._websocket_failed_permanently = False
         self._last_websocket_refresh = None
         self._websocket_refresh_interval = 3600  # Refresh URI every hour
+        self._realtime_data = {}  # Store real-time WebSocket data
+        self._realtime_data_timestamps = {}  # Track when real-time data was last updated
+        self._realtime_data_timeout = 300  # Clear real-time data after 5 minutes of no updates
         _LOGGER.info(
             "IquaSoftenerCoordinator initialized with %d minute update interval, WebSocket: %s",
             update_interval_minutes,
@@ -223,7 +227,6 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
     async def _refresh_websocket_uri(self):
         """Refresh the WebSocket URI by calling the /live endpoint."""
         try:
-            import time
             current_time = time.time()
             
             # Check if we need to refresh based on time
@@ -323,7 +326,9 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             await self._websocket_session.close()
             self._websocket_session = None
 
-        _LOGGER.info("WebSocket connection stopped")
+        # Clear real-time data when WebSocket stops
+        self._realtime_data.clear()
+        _LOGGER.info("WebSocket connection stopped and real-time data cleared")
 
     async def _websocket_handler(self):
         """Handle WebSocket connection and real-time data updates."""
@@ -422,58 +427,60 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         try:
             _LOGGER.debug("Processing real-time data: %s", data)
             
-            # Fix water flow unit conversion - use converted_property.value instead of raw value
-            # Handle both direct property access and the name-based structure from WebSocket
-            flow_data = None
-
-            # Check for direct property structure
-            if "current_water_flow_gpm" in data:
-                flow_data = data["current_water_flow_gpm"]
-                _LOGGER.debug("Found direct current_water_flow_gpm structure")
-            # Check for name-based structure from WebSocket
-            elif (
-                isinstance(data, dict) and data.get("name") == "current_water_flow_gpm"
-            ):
-                flow_data = data
-                _LOGGER.debug("Found name-based current_water_flow_gpm structure")
-
-            if flow_data and "converted_property" in flow_data:
-                if "value" in flow_data["converted_property"]:
+            # Handle current_water_flow_gpm specifically
+            corrected_flow_value = None
+            
+            # Check for name-based structure from WebSocket (your format)
+            if isinstance(data, dict) and data.get("name") == "current_water_flow_gpm":
+                if "converted_property" in data and "value" in data["converted_property"]:
                     # Use the properly converted value from converted_property
-                    corrected_value = flow_data["converted_property"]["value"]
-                    original_value = flow_data.get("value", "unknown")
-
-                    # Update the data structure for the library
-                    if "current_water_flow_gpm" in data:
-                        data["current_water_flow_gpm"]["value"] = corrected_value
-                    else:
-                        # Create the expected structure if we got the name-based format
-                        data = {
-                            "current_water_flow_gpm": {
-                                "value": corrected_value,
-                                "converted_property": flow_data["converted_property"],
-                            }
-                        }
-
-                    _LOGGER.debug(
-                        "Corrected water flow: raw=%s -> converted=%s gal/m",
+                    corrected_flow_value = data["converted_property"]["value"]
+                    original_value = data.get("value", "unknown")
+                    
+                    _LOGGER.info(
+                        "WebSocket water flow update: raw=%s -> converted=%s gpm",
                         original_value,
-                        corrected_value,
+                        corrected_flow_value,
                     )
+                    
+                    # Store the corrected value in coordinator's real-time data
+                    self._realtime_data["current_water_flow"] = corrected_flow_value
+                    self._realtime_data_timestamps["current_water_flow"] = time.time()
+                    _LOGGER.debug("Stored corrected flow value: %s", corrected_flow_value)
+            
+            # Also handle direct property structure (if it exists)
+            elif "current_water_flow_gpm" in data:
+                flow_data = data["current_water_flow_gpm"]
+                if "converted_property" in flow_data and "value" in flow_data["converted_property"]:
+                    corrected_flow_value = flow_data["converted_property"]["value"]
+                    original_value = flow_data.get("value", "unknown")
+                    
+                    _LOGGER.info(
+                        "WebSocket water flow update (direct): raw=%s -> converted=%s gpm",
+                        original_value,
+                        corrected_flow_value,
+                    )
+                    
+                    self._realtime_data["current_water_flow"] = corrected_flow_value
+                    self._realtime_data_timestamps["current_water_flow"] = time.time()
+                    _LOGGER.debug("Stored corrected flow value: %s", corrected_flow_value)
 
-            # Update the softener with real-time data
-            _LOGGER.debug("Updating iqua_softener with real-time data...")
-            await self.hass.async_add_executor_job(
-                self._iqua_softener.update_external_realtime_data, data
-            )
+            # Try to update the softener with real-time data (if method exists)
+            try:
+                _LOGGER.debug("Updating iqua_softener with real-time data...")
+                await self.hass.async_add_executor_job(
+                    self._iqua_softener.update_external_realtime_data, data
+                )
+            except AttributeError:
+                _LOGGER.debug("update_external_realtime_data method not available in iqua_softener library")
+            except Exception as err:
+                _LOGGER.warning("Failed to update library with real-time data: %s", err)
 
             # Trigger coordinator update to refresh all entities
             _LOGGER.debug("Triggering coordinator refresh...")
             await self.async_request_refresh()
 
-            _LOGGER.info("Real-time data updated successfully")
-        except AttributeError as err:
-            _LOGGER.error("update_external_realtime_data method not available in iqua_softener library: %s", err)
+            _LOGGER.info("Real-time data processed successfully")
         except Exception as err:
             _LOGGER.error("Failed to handle real-time data: %s", err)
 
@@ -588,7 +595,32 @@ class IquaSoftenerAvailableWaterSensor(IquaSoftenerSensor):
 
 class IquaSoftenerWaterCurrentFlowSensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
-        self._attr_native_value = data.current_water_flow
+        # Check if we have real-time WebSocket data with corrected flow value
+        if (hasattr(self.coordinator, '_realtime_data') and 
+            "current_water_flow" in self.coordinator._realtime_data):
+            
+            # Check if real-time data is fresh (not stale)
+            current_time = time.time()
+            last_update = self.coordinator._realtime_data_timestamps.get("current_water_flow", 0)
+            
+            if current_time - last_update < self.coordinator._realtime_data_timeout:
+                # Use the corrected real-time value from WebSocket
+                self._attr_native_value = self.coordinator._realtime_data["current_water_flow"]
+                _LOGGER.debug("Using real-time water flow: %s (age: %.1fs)", 
+                             self._attr_native_value, current_time - last_update)
+            else:
+                # Real-time data is stale, fall back to API data
+                self._attr_native_value = data.current_water_flow
+                _LOGGER.debug("Real-time data stale (age: %.1fs), using API water flow: %s", 
+                             current_time - last_update, self._attr_native_value)
+                # Clean up stale data
+                self.coordinator._realtime_data.pop("current_water_flow", None)
+                self.coordinator._realtime_data_timestamps.pop("current_water_flow", None)
+        else:
+            # Fall back to regular API data
+            self._attr_native_value = data.current_water_flow
+            _LOGGER.debug("Using API water flow: %s", self._attr_native_value)
+            
         self._attr_native_unit_of_measurement = (
             VOLUME_FLOW_RATE_LITERS_PER_MINUTE
             if data.volume_unit == IquaSoftenerVolumeUnit.LITERS
