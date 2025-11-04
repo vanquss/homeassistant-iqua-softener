@@ -247,6 +247,43 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
     async def _handle_realtime_data(self, data):
         """Handle real-time data updates from WebSocket."""
         try:
+            # Fix water flow unit conversion - use converted_property.value instead of raw value
+            # Handle both direct property access and the name-based structure from WebSocket
+            flow_data = None
+
+            # Check for direct property structure
+            if "current_water_flow_gpm" in data:
+                flow_data = data["current_water_flow_gpm"]
+            # Check for name-based structure from WebSocket
+            elif (
+                isinstance(data, dict) and data.get("name") == "current_water_flow_gpm"
+            ):
+                flow_data = data
+
+            if flow_data and "converted_property" in flow_data:
+                if "value" in flow_data["converted_property"]:
+                    # Use the properly converted value from converted_property
+                    corrected_value = flow_data["converted_property"]["value"]
+                    original_value = flow_data.get("value", "unknown")
+
+                    # Update the data structure for the library
+                    if "current_water_flow_gpm" in data:
+                        data["current_water_flow_gpm"]["value"] = corrected_value
+                    else:
+                        # Create the expected structure if we got the name-based format
+                        data = {
+                            "current_water_flow_gpm": {
+                                "value": corrected_value,
+                                "converted_property": flow_data["converted_property"],
+                            }
+                        }
+
+                    _LOGGER.debug(
+                        "Corrected water flow: raw=%s -> converted=%s gal/m",
+                        original_value,
+                        corrected_value,
+                    )
+
             # Update the softener with real-time data
             await self.hass.async_add_executor_job(
                 self._iqua_softener.update_external_realtime_data, data
