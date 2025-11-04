@@ -10,7 +10,9 @@ from .const import (
     CONF_PASSWORD,
     CONF_DEVICE_SERIAL_NUMBER,
     CONF_UPDATE_INTERVAL,
+    CONF_ENABLE_WEBSOCKET,
     DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_ENABLE_WEBSOCKET,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ DATA_SCHEMA_USER = vol.Schema(
         vol.Optional(CONF_UPDATE_INTERVAL, default=DEFAULT_UPDATE_INTERVAL): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=60)
         ),
+        vol.Optional(CONF_ENABLE_WEBSOCKET, default=DEFAULT_ENABLE_WEBSOCKET): bool,
     }
 )
 
@@ -61,6 +64,15 @@ class IquaSoftenerOptionsFlowHandler(config_entries.OptionsFlow):
                         ),
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
+                vol.Optional(
+                    CONF_ENABLE_WEBSOCKET,
+                    default=self.config_entry.options.get(
+                        CONF_ENABLE_WEBSOCKET,
+                        self.config_entry.data.get(
+                            CONF_ENABLE_WEBSOCKET, DEFAULT_ENABLE_WEBSOCKET
+                        ),
+                    ),
+                ): bool,
             }
         )
 

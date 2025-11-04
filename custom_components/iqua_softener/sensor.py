@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 import logging
 from typing import Optional, Any
+import asyncio
+import aiohttp
+import json
 
 from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import (
@@ -149,6 +152,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         hass: core.HomeAssistant,
         iqua_softener: IquaSoftener,
         update_interval_minutes: int = DEFAULT_UPDATE_INTERVAL,
+        enable_websocket: bool = True,
     ):
         super().__init__(
             hass,
@@ -157,10 +161,103 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(minutes=update_interval_minutes),
         )
         self._iqua_softener = iqua_softener
+        self._enable_websocket = enable_websocket
+        self._websocket_task = None
+        self._websocket_session = None
+        self._websocket_uri = None
         _LOGGER.info(
-            "IquaSoftenerCoordinator initialized with %d minute update interval",
+            "IquaSoftenerCoordinator initialized with %d minute update interval, WebSocket: %s",
             update_interval_minutes,
+            enable_websocket,
         )
+
+    async def async_start_websocket(self):
+        """Start the WebSocket connection for real-time data."""
+        if not self._enable_websocket:
+            _LOGGER.info("WebSocket disabled, skipping connection")
+            return
+            
+        try:
+            # Get the WebSocket URI from the softener
+            self._websocket_uri = await self.hass.async_add_executor_job(
+                self._iqua_softener.get_websocket_uri
+            )
+            _LOGGER.info("Starting WebSocket connection to: %s", self._websocket_uri)
+            
+            # Start the WebSocket task
+            self._websocket_task = self.hass.async_create_task(
+                self._websocket_handler()
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to start WebSocket connection: %s", err)
+
+    async def async_stop_websocket(self):
+        """Stop the WebSocket connection."""
+        if self._websocket_task:
+            self._websocket_task.cancel()
+            try:
+                await self._websocket_task
+            except asyncio.CancelledError:
+                pass
+            self._websocket_task = None
+
+        if self._websocket_session:
+            await self._websocket_session.close()
+            self._websocket_session = None
+
+        _LOGGER.info("WebSocket connection stopped")
+
+    async def _websocket_handler(self):
+        """Handle WebSocket connection and real-time data updates."""
+        while True:
+            try:
+                if not self._websocket_session:
+                    self._websocket_session = aiohttp.ClientSession()
+
+                async with self._websocket_session.ws_connect(
+                    self._websocket_uri,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    heartbeat=30,
+                ) as ws:
+                    _LOGGER.info("WebSocket connected successfully")
+                    
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                data = json.loads(msg.data)
+                                await self._handle_realtime_data(data)
+                            except json.JSONDecodeError as err:
+                                _LOGGER.warning("Invalid JSON received: %s", err)
+                        elif msg.type == aiohttp.WSMsgType.ERROR:
+                            _LOGGER.error("WebSocket error: %s", ws.exception())
+                            break
+                        elif msg.type == aiohttp.WSMsgType.CLOSE:
+                            _LOGGER.info("WebSocket closed by server")
+                            break
+
+            except asyncio.CancelledError:
+                _LOGGER.info("WebSocket handler cancelled")
+                break
+            except Exception as err:
+                _LOGGER.error("WebSocket connection error: %s", err)
+                
+            # Wait before reconnecting
+            await asyncio.sleep(30)
+
+    async def _handle_realtime_data(self, data):
+        """Handle real-time data updates from WebSocket."""
+        try:
+            # Update the softener with real-time data
+            await self.hass.async_add_executor_job(
+                self._iqua_softener.update_external_realtime_data, data
+            )
+            
+            # Trigger coordinator update to refresh all entities
+            await self.async_request_refresh()
+            
+            _LOGGER.debug("Real-time data updated: %s", data)
+        except Exception as err:
+            _LOGGER.error("Failed to handle real-time data: %s", err)
 
     async def _async_update_data(self) -> IquaSoftenerData:
         _LOGGER.debug("Fetching data from iQua API")

@@ -9,7 +9,9 @@ from .const import (
     CONF_PASSWORD,
     CONF_DEVICE_SERIAL_NUMBER,
     CONF_UPDATE_INTERVAL,
+    CONF_ENABLE_WEBSOCKET,
     DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_ENABLE_WEBSOCKET,
 )
 from .sensor import IquaSoftenerCoordinator
 
@@ -32,8 +34,12 @@ async def async_setup_entry(
     update_interval_minutes = hass_data.get(
         CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
     )
+    enable_websocket = hass_data.get(
+        CONF_ENABLE_WEBSOCKET, DEFAULT_ENABLE_WEBSOCKET
+    )
     _LOGGER.info(
-        "Creating coordinator with update interval: %d minutes", update_interval_minutes
+        "Creating coordinator with update interval: %d minutes, WebSocket: %s",
+        update_interval_minutes, enable_websocket
     )
     coordinator = IquaSoftenerCoordinator(
         hass,
@@ -41,14 +47,20 @@ async def async_setup_entry(
             hass_data[CONF_USERNAME],
             hass_data[CONF_PASSWORD],
             hass_data[CONF_DEVICE_SERIAL_NUMBER],
+            enable_websocket=False,  # Home Assistant will manage WebSocket
         ),
         update_interval_minutes,
+        enable_websocket,
     )
 
     unsub_options_update_listener = entry.add_update_listener(options_update_listener)
     hass_data["unsub_options_update_listener"] = unsub_options_update_listener
     hass_data["coordinator"] = coordinator
     hass.data[DOMAIN][entry.entry_id] = hass_data
+
+    # Start the WebSocket connection for real-time data (if enabled)
+    if enable_websocket:
+        await coordinator.async_start_websocket()
 
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "switch"])
     return True
@@ -58,12 +70,20 @@ async def options_update_listener(
     hass: core.HomeAssistant, config_entry: config_entries.ConfigEntry
 ):
     _LOGGER.info("Options updated, reloading integration")
+    # Stop WebSocket before reload
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    await coordinator.async_stop_websocket()
+    
     await hass.config_entries.async_reload(config_entry.entry_id)
 
 
 async def async_unload_entry(
     hass: core.HomeAssistant, entry: config_entries.ConfigEntry
 ) -> bool:
+    # Stop the WebSocket connection
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    await coordinator.async_stop_websocket()
+
     unload_ok = await hass.config_entries.async_unload_platforms(
         entry, ["sensor", "switch"]
     )

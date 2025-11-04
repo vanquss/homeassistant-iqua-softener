@@ -6,7 +6,8 @@
           "username": "Username",
           "password": "Password",
           "device_sn": "Serial Number",
-          "update_interval": "Update Interval (minutes)"
+          "update_interval": "Update Interval (minutes)",
+          "enable_websocket": "Enable Real-time Updates"
         },
         "description": "Enter your iQua credentials and device serial number.",
         "title": "Setup"
@@ -17,9 +18,10 @@
     "step": {
       "init": {
         "data": {
-          "update_interval": "Update Interval (minutes)"
+          "update_interval": "Update Interval (minutes)",
+          "enable_websocket": "Enable Real-time Updates"
         },
-        "description": "Configure how often to poll the iQua servers for updated data.",
+        "description": "Configure how often to poll the iQua servers and whether to enable real-time WebSocket updates.",
         "title": "iQua Softener Options"
       }
     }

@@ -2,7 +2,7 @@
 
 `iqua_softener` is a _custom component_ for [Home Assistant](https://www.home-assistant.io/). The integration allows you to pull data for you iQua app supported water softener from Ecowater company server.
 
-It will create ten sensors (refreshed based on your configured update interval, default 1 minute):
+It will create ten sensors with both periodic updates and real-time WebSocket data (default polling interval: 1 minute, with real-time flow updates):
 - State - whether the softener is connected to Ecowater server
 - Date/time - date and time set on water softener
 - Last regeneration - the day of last regeneration
@@ -20,6 +20,19 @@ It will also create one switch:
 The units displayed are set in the application settings.
 
 ![Homeassistant sensor dialog](sensor.png)
+
+## Real-Time Data Updates
+
+The integration now supports real-time data updates via WebSocket connection for select sensors:
+
+- **Water Current Flow**: Updates in real-time as water flow changes
+- **Other sensors**: Continue to use the configured polling interval for updates
+
+This provides the best of both worlds:
+- **Real-time responsiveness** for critical flow monitoring
+- **Efficient polling** for less time-sensitive data like salt levels and regeneration status
+
+The WebSocket connection is automatically managed by Home Assistant and will reconnect if the connection is lost.
 
 ## Water Shutoff Valve Control
 
@@ -78,6 +91,7 @@ To add an iQua water softener to Home assistant, go to Settings and click "+ ADD
 - Password - password for iQua application
 - Serial number - device serial number, you can find it in iQua app device information tab and field called "DSN#" (this field is case sensitive!)
 - Update Interval (minutes) - how often to poll the iQua servers for updated data (default: 1 minute, range: 1-60 minutes)
+- Enable Real-time Updates - enable WebSocket connection for real-time data updates (default: enabled)
 
 ## License
 [MIT](https://choosealicense.com/licenses/mit/)
