@@ -1,6 +1,18 @@
 # iQua app supported water softeners integration for Home Assistant
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
+[![GitHub release](https://img.shields.io/github/release/jmacul2/homeassistant-iqua-softener.svg)](https://github.com/jmacul2/homeassistant-iqua-softener/releases)
+
 `iqua_softener` is a _custom component_ for [Home Assistant](https://www.home-assistant.io/). The integration allows you to pull data for you iQua app supported water softener from Ecowater company server.
+
+## Features
+
+- **🔄 Real-time Updates**: WebSocket support for instant water flow monitoring
+- **💧 Water Control**: Remote water shutoff valve control for emergency situations
+- **📊 Comprehensive Monitoring**: 10 sensors covering all aspects of your water softener
+- **⚙️ Configurable**: Adjustable polling intervals and real-time update settings
+- **🏠 Native Integration**: Full Home Assistant integration with device grouping
+- **🔧 Automation Ready**: Perfect for leak detection and water usage automations
 
 It will create ten sensors with both periodic updates and real-time WebSocket data (default polling interval: 1 minute, with real-time flow updates):
 - State - whether the softener is connected to Ecowater server
@@ -83,7 +95,53 @@ action:
 ```
 
 ## Installation
-Copy the `custom_components/iqua_softener` folder into the config folder.
+
+### Method 1: HACS (Recommended)
+
+1. **Install HACS** if you haven't already:
+   - Follow the [HACS installation guide](https://hacs.xyz/docs/setup/download)
+
+2. **Add this repository to HACS**:
+   - Go to HACS in your Home Assistant
+   - Click on "Integrations"
+   - Click the three dots menu (⋮) in the top right
+   - Select "Custom repositories"
+   - Add repository URL: `https://github.com/jmacul2/homeassistant-iqua-softener`
+   - Select category: "Integration"
+   - Click "Add"
+
+3. **Install the integration**:
+   - Search for "iQua Softener" in HACS
+   - Click "Download"
+   - Restart Home Assistant
+
+### Method 2: Manual Installation
+
+Copy the `custom_components/iqua_softener` folder into your Home Assistant `config/custom_components` directory.
+
+**Directory structure should look like:**
+```
+config/
+  custom_components/
+    iqua_softener/
+      __init__.py
+      config_flow.py
+      const.py
+      manifest.json
+      sensor.py
+      switch.py
+      strings.json
+      translations/
+        en.json
+```
+
+After installation (either method), restart Home Assistant.
+
+## Prerequisites
+
+- Home Assistant 2023.1.0 or newer
+- Active iQua account with water softener registered
+- Network connectivity for your Home Assistant instance
 
 ## Configuration
 To add an iQua water softener to Home assistant, go to Settings and click "+ ADD INTEGRATION" button. From list select "iQua Softener" and click it, in displayed window you must enter:
@@ -92,6 +150,50 @@ To add an iQua water softener to Home assistant, go to Settings and click "+ ADD
 - Serial number - device serial number, you can find it in iQua app device information tab and field called "DSN#" (this field is case sensitive!)
 - Update Interval (minutes) - how often to poll the iQua servers for updated data (default: 1 minute, range: 1-60 minutes)
 - Enable Real-time Updates - enable WebSocket connection for real-time data updates (default: enabled)
+
+### Configuration Options
+
+After initial setup, you can modify settings by:
+1. Go to **Settings → Devices & Services**
+2. Find your iQua Softener integration
+3. Click **"Configure"** or the options button (⋯)
+4. Adjust the update interval or toggle real-time updates
+
+## Troubleshooting
+
+### Common Issues
+
+**Integration not appearing in HACS:**
+- Ensure you've added the custom repository URL correctly
+- Check that the category is set to "Integration"
+- Refresh HACS and try searching again
+
+**Authentication errors:**
+- Verify your iQua app credentials are correct
+- Ensure your device serial number (DSN#) is entered exactly as shown in the iQua app
+- Check that your iQua account has access to the water softener
+
+**No real-time updates:**
+- Check if "Enable Real-time Updates" is enabled in integration options
+- Verify your Home Assistant has internet connectivity
+- Check the logs for WebSocket connection errors
+
+**Sensors showing as unavailable:**
+- Check Home Assistant logs for API errors
+- Verify the device serial number is correct
+- Ensure the water softener is online in the iQua app
+
+### Enable Debug Logging
+
+To help diagnose issues, add this to your `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.iqua_softener: debug
+```
+
+Then restart Home Assistant and check the logs under **Settings → System → Logs**.
 
 ## License
 [MIT](https://choosealicense.com/licenses/mit/)

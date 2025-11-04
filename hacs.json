@@ -1,4 +1,7 @@
 {
   "name": "iQua Softener",
-  "render_readme": true
+  "render_readme": true,
+  "domains": ["sensor", "switch"],
+  "iot_class": "Cloud Polling",
+  "homeassistant": "2023.1.0"
 }
