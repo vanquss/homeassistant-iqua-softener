@@ -176,14 +176,14 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         if not self._enable_websocket:
             _LOGGER.info("WebSocket disabled, skipping connection")
             return
-            
+
         try:
             # Get the WebSocket URI from the softener
             self._websocket_uri = await self.hass.async_add_executor_job(
                 self._iqua_softener.get_websocket_uri
             )
             _LOGGER.info("Starting WebSocket connection to: %s", self._websocket_uri)
-            
+
             # Start the WebSocket task
             self._websocket_task = self.hass.async_create_task(
                 self._websocket_handler()
@@ -220,7 +220,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     heartbeat=30,
                 ) as ws:
                     _LOGGER.info("WebSocket connected successfully")
-                    
+
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             try:
@@ -240,7 +240,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 break
             except Exception as err:
                 _LOGGER.error("WebSocket connection error: %s", err)
-                
+
             # Wait before reconnecting
             await asyncio.sleep(30)
 
@@ -251,10 +251,10 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             await self.hass.async_add_executor_job(
                 self._iqua_softener.update_external_realtime_data, data
             )
-            
+
             # Trigger coordinator update to refresh all entities
             await self.async_request_refresh()
-            
+
             _LOGGER.debug("Real-time data updated: %s", data)
         except Exception as err:
             _LOGGER.error("Failed to handle real-time data: %s", err)

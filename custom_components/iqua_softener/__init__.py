@@ -34,12 +34,11 @@ async def async_setup_entry(
     update_interval_minutes = hass_data.get(
         CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
     )
-    enable_websocket = hass_data.get(
-        CONF_ENABLE_WEBSOCKET, DEFAULT_ENABLE_WEBSOCKET
-    )
+    enable_websocket = hass_data.get(CONF_ENABLE_WEBSOCKET, DEFAULT_ENABLE_WEBSOCKET)
     _LOGGER.info(
         "Creating coordinator with update interval: %d minutes, WebSocket: %s",
-        update_interval_minutes, enable_websocket
+        update_interval_minutes,
+        enable_websocket,
     )
     coordinator = IquaSoftenerCoordinator(
         hass,
@@ -73,7 +72,7 @@ async def options_update_listener(
     # Stop WebSocket before reload
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     await coordinator.async_stop_websocket()
-    
+
     await hass.config_entries.async_reload(config_entry.entry_id)
 
 
