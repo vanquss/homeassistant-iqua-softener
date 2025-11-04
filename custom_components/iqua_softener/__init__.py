@@ -46,7 +46,7 @@ async def async_setup_entry(
             hass_data[CONF_USERNAME],
             hass_data[CONF_PASSWORD],
             hass_data[CONF_DEVICE_SERIAL_NUMBER],
-            enable_websocket=False,  # Home Assistant will manage WebSocket
+            enable_websocket=enable_websocket,  # Use the same setting as coordinator
         ),
         update_interval_minutes,
         enable_websocket,
@@ -59,7 +59,10 @@ async def async_setup_entry(
 
     # Start the WebSocket connection for real-time data (if enabled)
     if enable_websocket:
+        _LOGGER.info("WebSocket is enabled, starting WebSocket connection...")
         await coordinator.async_start_websocket()
+    else:
+        _LOGGER.info("WebSocket is disabled in configuration")
 
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "switch"])
     return True
