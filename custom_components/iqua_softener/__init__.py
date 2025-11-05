@@ -46,7 +46,7 @@ async def async_setup_entry(
             hass_data[CONF_USERNAME],
             hass_data[CONF_PASSWORD],
             hass_data[CONF_DEVICE_SERIAL_NUMBER],
-            enable_websocket=enable_websocket,  # Use the same setting as coordinator
+            enable_websocket=enable_websocket,  # Let the library handle WebSocket
         ),
         update_interval_minutes,
         enable_websocket,
@@ -60,7 +60,7 @@ async def async_setup_entry(
 
     # Start the WebSocket connection for real-time data (if enabled)
     if enable_websocket:
-        _LOGGER.info("WebSocket is enabled, starting WebSocket connection...")
+        _LOGGER.info("WebSocket is enabled, starting library's WebSocket connection...")
         await coordinator.async_start_websocket()
     else:
         _LOGGER.info("WebSocket is disabled in configuration")

@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 import logging
-import time
 from typing import Optional, Any
 import asyncio
 import aiohttp
 import json
+import time
 
 from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import (
@@ -167,6 +167,8 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         self._iqua_softener = iqua_softener
         self._enable_websocket = enable_websocket
         self._config_data = config_data or {}
+        
+        # Home Assistant managed WebSocket
         self._websocket_task = None
         self._websocket_session = None
         self._websocket_uri = None
@@ -176,14 +178,19 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         self._realtime_data = {}  # Store real-time WebSocket data
         self._realtime_data_timestamps = {}  # Track when real-time data was last updated
         self._realtime_data_timeout = 300  # Clear real-time data after 5 minutes of no updates
+        
+        # Create a unique WebSocket identifier based on device serial and account
+        self._websocket_key = f"iqua_{self._iqua_softener.device_serial_number}_{hash(self._iqua_softener._username)}"
+        
         _LOGGER.info(
-            "IquaSoftenerCoordinator initialized with %d minute update interval, WebSocket: %s",
+            "IquaSoftenerCoordinator initialized with %d minute update interval, WebSocket: %s (key: %s)",
             update_interval_minutes,
             enable_websocket,
+            self._websocket_key,
         )
 
     async def async_start_websocket(self):
-        """Start the WebSocket connection for real-time data."""
+        """Start the WebSocket connection managed by Home Assistant."""
         if not self._enable_websocket:
             _LOGGER.info("WebSocket disabled, skipping connection")
             return
@@ -192,125 +199,39 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             _LOGGER.info("WebSocket failed permanently, skipping reconnection attempt")
             return
 
+        # Check if another instance already has a WebSocket for this device
+        if hasattr(self.hass.data, 'iqua_websockets'):
+            existing_ws = self.hass.data.iqua_websockets.get(self._websocket_key)
+            if existing_ws and not existing_ws.done():
+                _LOGGER.info("WebSocket already active for this device, sharing connection")
+                self._websocket_task = existing_ws
+                return
+
         try:
-            # First, ensure the softener is properly authenticated
-            _LOGGER.info("Verifying authentication status before WebSocket connection...")
-            try:
-                # Try to get regular data first to ensure authentication works
-                test_data = await self.hass.async_add_executor_job(
-                    self._iqua_softener.get_data
-                )
-                _LOGGER.info("Authentication verification successful")
-            except Exception as auth_err:
-                _LOGGER.error("Authentication failed, cannot establish WebSocket: %s", auth_err)
-                return
-
-            # Get fresh WebSocket URI from the softener
-            _LOGGER.info("Getting fresh WebSocket URI from /live endpoint...")
-            await self._refresh_websocket_uri()
-            
-            if not self._websocket_uri:
-                _LOGGER.error("WebSocket URI is empty or None after refresh")
-                return
-
-            # Start the WebSocket task
-            _LOGGER.info("Creating WebSocket task...")
-            self._websocket_task = self.hass.async_create_task(
-                self._websocket_handler()
-            )
-            _LOGGER.info("WebSocket task created successfully")
-        except AttributeError as err:
-            _LOGGER.error("get_websocket_uri method not available in iqua_softener library: %s", err)
-        except Exception as err:
-            _LOGGER.error("Failed to start WebSocket connection: %s", err)
-
-    async def _refresh_websocket_uri(self):
-        """Refresh the WebSocket URI by calling the /live endpoint."""
-        try:
-            current_time = time.time()
-            
-            # Check if we need to refresh based on time
-            if (self._last_websocket_refresh and 
-                current_time - self._last_websocket_refresh < self._websocket_refresh_interval):
-                time_since_refresh = current_time - self._last_websocket_refresh
-                _LOGGER.debug("WebSocket URI was refreshed %.0f seconds ago, skipping refresh", time_since_refresh)
-                return
-            
-            _LOGGER.info("Calling iqua_softener.get_websocket_uri() to refresh token...")
+            # Get fresh WebSocket URI from the library
+            _LOGGER.info("Getting WebSocket URI from library...")
             self._websocket_uri = await self.hass.async_add_executor_job(
                 self._iqua_softener.get_websocket_uri
             )
             
-            if self._websocket_uri:
-                self._last_websocket_refresh = current_time
-                _LOGGER.info("WebSocket URI refreshed successfully (length: %d chars)", len(self._websocket_uri))
-                
-                # Handle different URI formats
-                if self._websocket_uri.startswith('wss://'):
-                    # Already a full WebSocket URL
-                    uri_parts = self._websocket_uri.split('?')
-                    base_uri = uri_parts[0] if uri_parts else self._websocket_uri
-                    _LOGGER.info("WebSocket base URI: %s", base_uri)
-                elif self._websocket_uri.startswith('/ws/'):
-                    # Handle relative URI - construct full URL
-                    _LOGGER.info("Got relative WebSocket URI: %s", self._websocket_uri[:50] + "...")
-                    
-                    # Try to get WebSocket base URL from the library's configuration
-                    websocket_base = self._get_websocket_base_url()
-                    full_uri = f"{websocket_base}{self._websocket_uri}"
-                    
-                    _LOGGER.info("Constructed full WebSocket URI using base: %s", websocket_base)
-                    self._websocket_uri = full_uri
-                else:
-                    _LOGGER.warning("Unexpected WebSocket URI format: %s", self._websocket_uri[:50] + "...")
-            else:
-                _LOGGER.error("WebSocket URI refresh returned empty/None")
-                
-        except Exception as err:
-            _LOGGER.error("Failed to refresh WebSocket URI: %s", err)
-            self._websocket_uri = None
+            if not self._websocket_uri:
+                _LOGGER.error("WebSocket URI is empty or None")
+                return
 
-    def _get_websocket_base_url(self):
-        """Get the WebSocket base URL, preferably from configuration or the iqua_softener library."""
-        try:
-            # First, check if user has configured a custom WebSocket base URL
-            if self._config_data and CONF_WEBSOCKET_BASE_URL in self._config_data:
-                custom_url = self._config_data[CONF_WEBSOCKET_BASE_URL]
-                if custom_url:
-                    _LOGGER.debug("Using configured WebSocket base URL: %s", custom_url)
-                    return custom_url
+            # Start the WebSocket task managed by Home Assistant
+            _LOGGER.info("Creating Home Assistant managed WebSocket task...")
+            self._websocket_task = self.hass.async_create_task(
+                self._websocket_handler()
+            )
             
-            # Try to get base URL from the library if it has this capability
-            if hasattr(self._iqua_softener, 'get_base_url'):
-                http_base = self._iqua_softener.get_base_url()
-                # Convert HTTP/HTTPS to WebSocket URL
-                if http_base.startswith('https://'):
-                    derived_url = http_base.replace('https://', 'wss://')
-                    _LOGGER.debug("Derived WebSocket base URL from library: %s", derived_url)
-                    return derived_url
-                elif http_base.startswith('http://'):
-                    derived_url = http_base.replace('http://', 'ws://')
-                    _LOGGER.debug("Derived WebSocket base URL from library: %s", derived_url)
-                    return derived_url
+            # Store the WebSocket task globally to prevent duplicates
+            if not hasattr(self.hass.data, 'iqua_websockets'):
+                self.hass.data.iqua_websockets = {}
+            self.hass.data.iqua_websockets[self._websocket_key] = self._websocket_task
             
-            # Try to get it from other library attributes
-            if hasattr(self._iqua_softener, 'base_url'):
-                http_base = self._iqua_softener.base_url
-                if http_base.startswith('https://'):
-                    derived_url = http_base.replace('https://', 'wss://')
-                    _LOGGER.debug("Derived WebSocket base URL from library base_url: %s", derived_url)
-                    return derived_url
-                elif http_base.startswith('http://'):
-                    derived_url = http_base.replace('http://', 'ws://')
-                    _LOGGER.debug("Derived WebSocket base URL from library base_url: %s", derived_url)
-                    return derived_url
-                    
+            _LOGGER.info("Home Assistant WebSocket task created successfully")
         except Exception as err:
-            _LOGGER.debug("Could not derive WebSocket base URL from library: %s", err)
-        
-        # Fallback to configured constant
-        _LOGGER.debug("Using default WebSocket base URL: %s", IQUA_WEBSOCKET_BASE_URL)
-        return IQUA_WEBSOCKET_BASE_URL
+            _LOGGER.error("Failed to start WebSocket connection: %s", err)
 
     async def async_stop_websocket(self):
         """Stop the WebSocket connection."""
@@ -326,14 +247,18 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             await self._websocket_session.close()
             self._websocket_session = None
 
+        # Remove from global WebSocket registry
+        if hasattr(self.hass.data, 'iqua_websockets'):
+            self.hass.data.iqua_websockets.pop(self._websocket_key, None)
+
         # Clear real-time data when WebSocket stops
         self._realtime_data.clear()
         _LOGGER.info("WebSocket connection stopped and real-time data cleared")
 
     async def _websocket_handler(self):
-        """Handle WebSocket connection and real-time data updates."""
+        """Handle WebSocket connection managed by Home Assistant."""
         retry_count = 0
-        max_retries = 3  # Reduced retries for 400 errors
+        max_retries = 3
         
         while retry_count < max_retries:
             try:
@@ -349,15 +274,15 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     heartbeat=30,
                 ) as ws:
                     _LOGGER.info("WebSocket connected successfully")
-                    retry_count = 0  # Reset retry count on successful connection
+                    retry_count = 0
                     
                     # Set up periodic URI refresh
-                    last_refresh_check = asyncio.get_event_loop().time()
+                    last_refresh_check = time.time()
                     refresh_check_interval = 1800  # Check every 30 minutes
 
                     async for msg in ws:
                         # Check if we need to refresh URI periodically
-                        current_time = asyncio.get_event_loop().time()
+                        current_time = time.time()
                         if current_time - last_refresh_check > refresh_check_interval:
                             _LOGGER.debug("Checking if WebSocket URI needs refresh...")
                             await self._refresh_websocket_uri()
@@ -383,7 +308,6 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             except aiohttp.ClientResponseError as err:
                 if err.status == 400:
                     _LOGGER.error("WebSocket 400 error - likely token expiration: %s", err)
-                    # For 400 errors, try to refresh the websocket URI
                     if retry_count < max_retries - 1:
                         _LOGGER.info("Attempting to refresh WebSocket URI due to 400 error...")
                         try:
@@ -397,30 +321,46 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 else:
                     _LOGGER.error("WebSocket HTTP error (attempt %d/%d): %s", 
                                  retry_count + 1, max_retries, err)
-            except aiohttp.ClientError as err:
-                _LOGGER.error("WebSocket client error (attempt %d/%d): %s", 
-                             retry_count + 1, max_retries, err)
             except Exception as err:
                 _LOGGER.error("WebSocket connection error (attempt %d/%d): %s", 
                              retry_count + 1, max_retries, err)
 
             retry_count += 1
             if retry_count < max_retries:
-                wait_time = min(60 * retry_count, 300)  # Longer waits for auth issues
+                wait_time = min(60 * retry_count, 300)
                 _LOGGER.info("Waiting %d seconds before retry...", wait_time)
                 await asyncio.sleep(wait_time)
             else:
                 _LOGGER.error("Max WebSocket retry attempts reached. WebSocket functionality disabled.")
-                _LOGGER.info("Regular polling will continue to work. You may want to check your iQua account status.")
                 self._websocket_failed_permanently = True
                 break
 
-    async def async_retry_websocket(self):
-        """Manually retry WebSocket connection (useful for service calls)."""
-        _LOGGER.info("Manual WebSocket retry requested")
-        self._websocket_failed_permanently = False
-        await self.async_stop_websocket()
-        await self.async_start_websocket()
+    async def _refresh_websocket_uri(self):
+        """Refresh the WebSocket URI using the library."""
+        try:
+            current_time = time.time()
+            
+            # Check if we need to refresh based on time
+            if (self._last_websocket_refresh and 
+                current_time - self._last_websocket_refresh < self._websocket_refresh_interval):
+                time_since_refresh = current_time - self._last_websocket_refresh
+                _LOGGER.debug("WebSocket URI was refreshed %.0f seconds ago, skipping refresh", time_since_refresh)
+                return
+            
+            _LOGGER.info("Refreshing WebSocket URI using library...")
+            new_uri = await self.hass.async_add_executor_job(
+                self._iqua_softener.get_websocket_uri
+            )
+            
+            if new_uri and new_uri != self._websocket_uri:
+                self._websocket_uri = new_uri
+                self._last_websocket_refresh = current_time
+                _LOGGER.info("WebSocket URI refreshed successfully")
+            else:
+                _LOGGER.error("WebSocket URI refresh returned empty/None or same URI")
+                
+        except Exception as err:
+            _LOGGER.error("Failed to refresh WebSocket URI: %s", err)
 
     async def _handle_realtime_data(self, data):
         """Handle real-time data updates from WebSocket."""
@@ -428,12 +368,8 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Processing real-time data: %s", data)
             
             # Handle current_water_flow_gpm specifically
-            corrected_flow_value = None
-            
-            # Check for name-based structure from WebSocket (your format)
             if isinstance(data, dict) and data.get("name") == "current_water_flow_gpm":
                 if "converted_property" in data and "value" in data["converted_property"]:
-                    # Use the properly converted value from converted_property
                     corrected_flow_value = data["converted_property"]["value"]
                     original_value = data.get("value", "unknown")
                     
@@ -443,46 +379,27 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                         corrected_flow_value,
                     )
                     
-                    # Store the corrected value in coordinator's real-time data
-                    self._realtime_data["current_water_flow"] = corrected_flow_value
-                    self._realtime_data_timestamps["current_water_flow"] = time.time()
-                    _LOGGER.debug("Stored corrected flow value: %s", corrected_flow_value)
-            
-            # Also handle direct property structure (if it exists)
-            elif "current_water_flow_gpm" in data:
-                flow_data = data["current_water_flow_gpm"]
-                if "converted_property" in flow_data and "value" in flow_data["converted_property"]:
-                    corrected_flow_value = flow_data["converted_property"]["value"]
-                    original_value = flow_data.get("value", "unknown")
+                    # Store the corrected value and update the library
+                    self._realtime_data["current_water_flow_gpm"] = corrected_flow_value
+                    self._realtime_data_timestamps["current_water_flow_gpm"] = time.time()
                     
-                    _LOGGER.info(
-                        "WebSocket water flow update (direct): raw=%s -> converted=%s gpm",
-                        original_value,
-                        corrected_flow_value,
+                    # Update the library's external real-time data
+                    await self.hass.async_add_executor_job(
+                        self._iqua_softener.update_external_realtime_data, {data["name"]: data}
                     )
-                    
-                    self._realtime_data["current_water_flow"] = corrected_flow_value
-                    self._realtime_data_timestamps["current_water_flow"] = time.time()
-                    _LOGGER.debug("Stored corrected flow value: %s", corrected_flow_value)
-
-            # Try to update the softener with real-time data (if method exists)
-            try:
-                _LOGGER.debug("Updating iqua_softener with real-time data...")
-                await self.hass.async_add_executor_job(
-                    self._iqua_softener.update_external_realtime_data, data
-                )
-            except AttributeError:
-                _LOGGER.debug("update_external_realtime_data method not available in iqua_softener library")
-            except Exception as err:
-                _LOGGER.warning("Failed to update library with real-time data: %s", err)
 
             # Trigger coordinator update to refresh all entities
-            _LOGGER.debug("Triggering coordinator refresh...")
             await self.async_request_refresh()
-
-            _LOGGER.info("Real-time data processed successfully")
+            _LOGGER.debug("Real-time data processed successfully")
         except Exception as err:
             _LOGGER.error("Failed to handle real-time data: %s", err)
+
+    async def async_retry_websocket(self):
+        """Manually retry WebSocket connection."""
+        _LOGGER.info("Manual WebSocket retry requested")
+        self._websocket_failed_permanently = False
+        await self.async_stop_websocket()
+        await self.async_start_websocket()
 
     async def _async_update_data(self) -> IquaSoftenerData:
         _LOGGER.debug("Fetching data from iQua API")
@@ -595,27 +512,13 @@ class IquaSoftenerAvailableWaterSensor(IquaSoftenerSensor):
 
 class IquaSoftenerWaterCurrentFlowSensor(IquaSoftenerSensor):
     def update(self, data: IquaSoftenerData):
-        # Check if we have real-time WebSocket data with corrected flow value
-        if (hasattr(self.coordinator, '_realtime_data') and 
-            "current_water_flow" in self.coordinator._realtime_data):
-            
-            # Check if real-time data is fresh (not stale)
-            current_time = time.time()
-            last_update = self.coordinator._realtime_data_timestamps.get("current_water_flow", 0)
-            
-            if current_time - last_update < self.coordinator._realtime_data_timeout:
-                # Use the corrected real-time value from WebSocket
-                self._attr_native_value = self.coordinator._realtime_data["current_water_flow"]
-                _LOGGER.debug("Using real-time water flow: %s (age: %.1fs)", 
-                             self._attr_native_value, current_time - last_update)
-            else:
-                # Real-time data is stale, fall back to API data
-                self._attr_native_value = data.current_water_flow
-                _LOGGER.debug("Real-time data stale (age: %.1fs), using API water flow: %s", 
-                             current_time - last_update, self._attr_native_value)
-                # Clean up stale data
-                self.coordinator._realtime_data.pop("current_water_flow", None)
-                self.coordinator._realtime_data_timestamps.pop("current_water_flow", None)
+        # Use the library's get_realtime_property method for real-time flow data
+        realtime_flow = self.coordinator._iqua_softener.get_realtime_property("current_water_flow_gpm")
+        
+        if realtime_flow is not None:
+            # Use real-time WebSocket data
+            self._attr_native_value = realtime_flow
+            _LOGGER.debug("Using real-time water flow from library: %s", realtime_flow)
         else:
             # Fall back to regular API data
             self._attr_native_value = data.current_water_flow
