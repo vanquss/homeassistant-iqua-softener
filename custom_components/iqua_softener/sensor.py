@@ -228,7 +228,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Failed to reset WebSocket authentication: %s", err)
             self._websocket_failed_permanently = True
 
-    async def async_restart_websocket(self):
+    async def async_start_websocket(self):
         """Start the WebSocket connection managed by Home Assistant."""
         if not self._enable_websocket:
             _LOGGER.info("WebSocket disabled, skipping connection")
@@ -256,25 +256,36 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             )
 
             if not self._websocket_uri:
-                _LOGGER.error("WebSocket URI is empty or None")
+                _LOGGER.error("Failed to get WebSocket URI from library")
                 return
 
-            # Start the WebSocket task managed by Home Assistant
-            _LOGGER.info("Creating Home Assistant managed WebSocket task...")
+            _LOGGER.info("Got WebSocket URI, starting connection...")
+
+            # Start the WebSocket handler task
             self._websocket_task = self.hass.async_create_task(
-                self._websocket_handler()
+                self._websocket_handler(),
+                name=f"iqua_websocket_{self._device_serial_number}",
             )
 
-            # Store the WebSocket task globally to prevent duplicates
+            # Register in global WebSocket registry
             if "iqua_websockets" not in self.hass.data:
                 self.hass.data["iqua_websockets"] = {}
             self.hass.data["iqua_websockets"][
                 self._websocket_key
             ] = self._websocket_task
 
-            _LOGGER.info("Home Assistant WebSocket task created successfully")
+            _LOGGER.info("WebSocket connection started successfully")
+
         except Exception as err:
             _LOGGER.error("Failed to start WebSocket connection: %s", err)
+            self._websocket_failed_permanently = True
+
+    async def async_restart_websocket(self):
+        """Restart the WebSocket connection."""
+        _LOGGER.info("Restarting WebSocket connection")
+        self._websocket_failed_permanently = False
+        await self.async_stop_websocket()
+        await self.async_start_websocket()
 
     async def async_stop_websocket(self):
         """Stop the WebSocket connection."""
