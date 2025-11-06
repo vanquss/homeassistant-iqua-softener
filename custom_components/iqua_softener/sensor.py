@@ -168,6 +168,11 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         self._enable_websocket = enable_websocket
         self._config_data = config_data or {}
 
+        # Store credentials for authentication recovery
+        self._username = self._config_data.get("username")
+        self._password = self._config_data.get("password")
+        self._device_serial_number = self._config_data.get("device_sn")
+
         # Home Assistant managed WebSocket
         self._websocket_task = None
         self._websocket_session = None
@@ -211,7 +216,9 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             from iqua_softener import IquaSoftener
 
             self._iqua_softener = IquaSoftener(
-                self._username, self._password, self._device_serial_number
+                self._username,
+                self._password,
+                self._device_serial_number,
             )
 
             # Get fresh WebSocket URI
@@ -468,7 +475,9 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     from iqua_softener import IquaSoftener
 
                     self._iqua_softener = IquaSoftener(
-                        self._username, self._password, self._device_serial_number
+                        self._username,
+                        self._password,
+                        self._device_serial_number,
                     )
                     # Try again with fresh client
                     new_uri = await self.hass.async_add_executor_job(
@@ -566,7 +575,9 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     from iqua_softener import IquaSoftener
 
                     self._iqua_softener = IquaSoftener(
-                        self._username, self._password, self._device_serial_number
+                        self._username,
+                        self._password,
+                        self._device_serial_number,
                     )
                     # Try the request again with fresh client
                     data = await self.hass.async_add_executor_job(
