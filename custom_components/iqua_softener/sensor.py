@@ -191,10 +191,6 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         # Create a unique WebSocket identifier based on device serial and account
         self._websocket_key = f"iqua_{self._iqua_softener.device_serial_number}_{hash(self._iqua_softener._username)}"
 
-        # Add periodic health check
-        self._last_health_check = None
-        self._health_check_interval = 300  # Check every 5 minutes
-        
         # Flag to delay WebSocket start until after bootstrap
         self._websocket_start_delayed = False
 
@@ -694,20 +690,6 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             self._websocket_start_delayed = True
             # Schedule WebSocket start as a background task to avoid blocking data fetch
             self.hass.async_create_task(self.async_start_websocket())
-        
-        # Periodic WebSocket health check
-        current_time = time.time()
-        if (not self._last_health_check or 
-            current_time - self._last_health_check > self._health_check_interval):
-            
-            health_status = await self.check_websocket_health()
-            _LOGGER.debug("🔍 WebSocket health check: %s", health_status)
-            self._last_health_check = current_time
-            
-            # If WebSocket is stale, try to restart it
-            if "stale" in health_status.lower() or "restarting" in health_status.lower():
-                _LOGGER.info("🔄 WebSocket appears unhealthy, attempting restart...")
-                self.hass.async_create_task(self.async_restart_websocket())
         
         try:
             data = await self.hass.async_add_executor_job(
