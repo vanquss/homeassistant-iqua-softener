@@ -179,7 +179,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         self._websocket_uri = None
         self._websocket_failed_permanently = False
         self._last_websocket_refresh = None
-        self._websocket_refresh_interval = 3600  # Refresh URI every hour
+        self._websocket_refresh_interval = 150  # Refresh URI every 2.5 minutes (WebSocket times out at 3 min)
         self._realtime_data = {}  # Store real-time WebSocket data
         self._realtime_data_timestamps = (
             {}
@@ -371,12 +371,14 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                             last_message_time = time.time()
                             last_refresh_check = time.time()
                             last_heartbeat_log = time.time()
+                            last_proactive_refresh = time.time()
                             message_count = 0
                             
                             # Timing intervals
-                            refresh_check_interval = 1800    # Check every 30 minutes
+                            refresh_check_interval = 120     # Check every 2 minutes (more frequent than 3min timeout)
                             heartbeat_log_interval = 60      # Log heartbeat every 1 minute
                             stale_connection_threshold = 600 # Consider stale after 10 minutes of no messages
+                            proactive_refresh_interval = 150 # Proactively refresh every 2.5 minutes (before 3min timeout)
                             
                             _LOGGER.debug("🔍 Starting WebSocket message loop with monitoring...")
 
@@ -403,6 +405,15 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                                         last_refresh_check = current_time
                                     except Exception as refresh_err:
                                         _LOGGER.warning("⚠️ Periodic URI refresh failed: %s", refresh_err)
+
+                                # Proactive refresh before token expires
+                                if current_time - last_proactive_refresh > proactive_refresh_interval:
+                                    _LOGGER.info("🔄 Proactive WebSocket URI refresh (3min timeout prevention)...")
+                                    try:
+                                        await self._force_refresh_websocket_uri()
+                                        last_proactive_refresh = current_time
+                                    except Exception as refresh_err:
+                                        _LOGGER.warning("⚠️ Proactive URI refresh failed: %s", refresh_err)
 
                                 if msg.type == aiohttp.WSMsgType.TEXT:
                                     last_message_time = current_time
@@ -455,15 +466,23 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                         token_age = time.time() - self._last_websocket_refresh
                         _LOGGER.error("   🕐 Token age at failure: %.2f minutes", token_age / 60)
                     
-                    if retry_count < max_retries - 1:
-                        _LOGGER.info("🔄 Attempting to recover from token expiration...")
-                        try:
-                            await self._recover_from_token_expiration()
-                        except Exception as recovery_err:
-                            _LOGGER.error("❌ Token recovery failed: %s", recovery_err)
+                    # Always try to recover from 400 errors (don't set permanent failure)
+                    _LOGGER.info("🔄 Attempting to recover from token expiration...")
+                    try:
+                        await self._recover_from_token_expiration()
+                        # Reset retry count on successful recovery to give fresh attempts
+                        retry_count = 0
+                        continue
+                    except Exception as recovery_err:
+                        _LOGGER.error("❌ Token recovery failed: %s", recovery_err)
                 elif err.status == 401:
                     _LOGGER.error("❌ WebSocket 401 error - Authentication failed")
-                    await self._recover_from_token_expiration()
+                    try:
+                        await self._recover_from_token_expiration()
+                        retry_count = 0
+                        continue
+                    except Exception as recovery_err:
+                        _LOGGER.error("❌ Auth recovery failed: %s", recovery_err)
                 elif err.status == 403:
                     _LOGGER.error("❌ WebSocket 403 error - Access forbidden")
                 else:
@@ -538,12 +557,24 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                                  time_since_refresh)
                     return
 
-            _LOGGER.info("🔄 Refreshing WebSocket URI using library...")
+            await self._force_refresh_websocket_uri()
+                
+        except Exception as err:
+            _LOGGER.error("❌ Failed to refresh WebSocket URI: %s", err, exc_info=True)
+            raise
+
+    async def _force_refresh_websocket_uri(self):
+        """Force refresh the WebSocket URI regardless of timing."""
+        try:
+            current_time = time.time()
+            
+            _LOGGER.info("🔄 Force refreshing WebSocket URI using library (/live endpoint call)...")
             
             # Store old URI for comparison
             old_uri = self._websocket_uri
             old_token_preview = self._get_token_preview(old_uri) if old_uri else None
             
+            # Use the library to get a fresh WebSocket URI (this calls /live endpoint internally)
             new_uri = await self.hass.async_add_executor_job(
                 self._iqua_softener.get_websocket_uri
             )
@@ -556,23 +587,24 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 if new_uri != self._websocket_uri:
                     self._websocket_uri = new_uri
                     self._last_websocket_refresh = current_time
-                    _LOGGER.info("✅ WebSocket URI refreshed successfully (token changed)")
+                    _LOGGER.info("✅ WebSocket URI force refreshed successfully (token changed)")
                 else:
-                    _LOGGER.warning("⚠️ WebSocket URI refresh returned same URI - token may not have changed")
+                    _LOGGER.warning("⚠️ WebSocket URI force refresh returned same URI - token may not have changed")
                     # Update timestamp anyway to prevent constant refresh attempts
                     self._last_websocket_refresh = current_time
             else:
-                _LOGGER.error("❌ WebSocket URI refresh returned empty/None")
+                _LOGGER.error("❌ WebSocket URI force refresh returned empty/None")
+                raise Exception("Failed to get new WebSocket URI from library")
                 
-            _LOGGER.debug("=== End WebSocket URI Refresh ===")
+            _LOGGER.debug("=== End WebSocket URI Force Refresh ===")
 
         except TypeError as err:
             # Handle the same authentication error we saw in data fetching
             if "'str' object is not callable" in str(err):
-                _LOGGER.error("🔐 Authentication error during WebSocket URI refresh: %s", err)
+                _LOGGER.error("🔐 Authentication error during WebSocket URI force refresh: %s", err)
                 # Try to recreate the client
                 try:
-                    _LOGGER.debug("🔄 Recreating iQua client during WebSocket URI refresh")
+                    _LOGGER.debug("🔄 Recreating iQua client during WebSocket URI force refresh")
                     from iqua_softener import IquaSoftener
 
                     self._iqua_softener = IquaSoftener(
@@ -586,18 +618,19 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                     )
                     if new_uri:
                         self._websocket_uri = new_uri
-                        self._last_websocket_refresh = current_time
-                        _LOGGER.info("✅ WebSocket URI refreshed after authentication recovery")
+                        self._last_websocket_refresh = time.time()
+                        _LOGGER.info("✅ WebSocket URI force refreshed after authentication recovery")
                     else:
-                        _LOGGER.error("❌ WebSocket URI refresh failed even after authentication recovery")
+                        _LOGGER.error("❌ WebSocket URI force refresh failed even after authentication recovery")
+                        raise Exception("Failed to get WebSocket URI after auth recovery")
                 except Exception as recovery_err:
                     _LOGGER.error("❌ Failed to recover WebSocket authentication: %s", recovery_err)
                     raise
             else:
-                _LOGGER.error("❌ Unexpected TypeError during WebSocket URI refresh: %s", err)
+                _LOGGER.error("❌ Unexpected TypeError during WebSocket URI force refresh: %s", err)
                 raise
         except Exception as err:
-            _LOGGER.error("❌ Failed to refresh WebSocket URI: %s", err, exc_info=True)
+            _LOGGER.error("❌ Failed to force refresh WebSocket URI: %s", err, exc_info=True)
             raise
 
     def _get_token_preview(self, uri):
@@ -616,6 +649,14 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             return "WebSocket disabled"
             
         if self._websocket_failed_permanently:
+            # Try to recover from permanent failure after some time
+            if self._last_health_check:
+                time_since_failure = time.time() - self._last_health_check
+                if time_since_failure > 1800:  # Try to recover after 30 minutes
+                    _LOGGER.info("🔄 Attempting to recover from permanent WebSocket failure after 30 minutes...")
+                    self._websocket_failed_permanently = False
+                    await self.async_restart_websocket()
+                    return "Attempting recovery from permanent failure"
             return "WebSocket failed permanently"
             
         if not self._websocket_task:
@@ -623,6 +664,7 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             
         if self._websocket_task.done():
             _LOGGER.warning("⚠️ WebSocket task completed unexpectedly - restarting...")
+            self._websocket_failed_permanently = False  # Reset failure flag
             await self.async_restart_websocket()
             return "WebSocket task was done - restarted"
             
