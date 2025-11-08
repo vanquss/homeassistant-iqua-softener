@@ -331,28 +331,37 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         _LOGGER.info("WebSocket connection stopped and real-time data cleared")
 
     async def _websocket_handler(self):
-        """Handle WebSocket connection with enhanced monitoring and recovery."""
+        """Handle WebSocket connection with 3-minute refresh cycle."""
         retry_count = 0
         max_retries = 3
-        connection_start_time = time.time()
 
-        _LOGGER.debug("🚀 WebSocket handler starting...")
+        _LOGGER.debug("🚀 WebSocket handler starting with 3-minute refresh cycle...")
 
         while retry_count < max_retries:
             try:
+                # Get fresh WebSocket URI before each connection
+                _LOGGER.info("🔄 Getting fresh WebSocket URI from /live endpoint...")
+                try:
+                    new_uri = await self.hass.async_add_executor_job(
+                        self._iqua_softener.get_websocket_uri
+                    )
+                    if new_uri:
+                        self._websocket_uri = new_uri
+                        self._last_websocket_refresh = time.time()
+                        _LOGGER.info("✅ Got fresh WebSocket URI for connection")
+                    else:
+                        _LOGGER.error("❌ Failed to get WebSocket URI from /live endpoint")
+                        raise Exception("No WebSocket URI available")
+                except Exception as uri_err:
+                    _LOGGER.error("❌ Failed to get WebSocket URI: %s", uri_err)
+                    retry_count += 1
+                    await asyncio.sleep(min(60 * retry_count, 300))
+                    continue
+
                 if not self._websocket_session:
                     self._websocket_session = aiohttp.ClientSession()
 
-                _LOGGER.info(
-                    "🔌 Attempting WebSocket connection (attempt %d/%d)",
-                    retry_count + 1,
-                    max_retries,
-                )
-
-                # Log connection timing info
-                if self._last_websocket_refresh:
-                    token_age = time.time() - self._last_websocket_refresh
-                    _LOGGER.debug("🕐 Token age: %.2f minutes", token_age / 60)
+                _LOGGER.info("� Connecting WebSocket (attempt %d/%d)", retry_count + 1, max_retries)
 
                 # Add connection timeout to prevent hanging during bootstrap
                 try:
@@ -363,57 +372,38 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                             heartbeat=30,
                         ) as ws:
                             connection_success_time = time.time()
-                            _LOGGER.info("✅ WebSocket connected successfully after %.2f seconds", 
-                                        connection_success_time - connection_start_time)
+                            _LOGGER.info("✅ WebSocket connected successfully")
                             retry_count = 0
 
                             # Connection monitoring variables
                             last_message_time = time.time()
-                            last_refresh_check = time.time()
                             last_heartbeat_log = time.time()
-                            last_proactive_refresh = time.time()
                             message_count = 0
+                            websocket_start_time = time.time()
                             
-                            # Timing intervals
-                            refresh_check_interval = 120     # Check every 2 minutes (more frequent than 3min timeout)
+                            # Timing intervals - WebSocket URI is only valid for 3 minutes
                             heartbeat_log_interval = 60      # Log heartbeat every 1 minute
-                            stale_connection_threshold = 600 # Consider stale after 10 minutes of no messages
-                            proactive_refresh_interval = 150 # Proactively refresh every 2.5 minutes (before 3min timeout)
+                            websocket_lifetime_limit = 150   # Disconnect and refresh after 2.5 minutes (before 3min expiry)
                             
-                            _LOGGER.debug("🔍 Starting WebSocket message loop with monitoring...")
+                            _LOGGER.debug("🔍 Starting WebSocket message loop with 3-minute refresh cycle...")
 
                             async for msg in ws:
                                 current_time = time.time()
                                 
+                                # Check if WebSocket has been connected for 2.5 minutes - force refresh before 3min expiry
+                                websocket_age = current_time - websocket_start_time
+                                if websocket_age > websocket_lifetime_limit:
+                                    _LOGGER.info("� WebSocket URI expired after %.1f minutes - disconnecting for refresh", 
+                                               websocket_age / 60)
+                                    break  # Exit the message loop to trigger reconnection with fresh URI
+                                
                                 # Periodic heartbeat logging to verify connection is alive
                                 if current_time - last_heartbeat_log > heartbeat_log_interval:
                                     time_since_message = current_time - last_message_time
-                                    _LOGGER.info("💓 WebSocket heartbeat: %d messages received, %.1f min since last message", 
-                                                message_count, time_since_message / 60)
+                                    _LOGGER.info("💓 WebSocket heartbeat: %d messages, %.1f min old, %.1f min remaining", 
+                                                message_count, time_since_message / 60, 
+                                                (websocket_lifetime_limit - websocket_age) / 60)
                                     last_heartbeat_log = current_time
-                                    
-                                    # Check for stale connection
-                                    if time_since_message > stale_connection_threshold:
-                                        _LOGGER.warning("⚠️ WebSocket connection appears stale (%.1f min without messages) - may need refresh", 
-                                                       time_since_message / 60)
-
-                                # Check if we need to refresh URI periodically
-                                if current_time - last_refresh_check > refresh_check_interval:
-                                    _LOGGER.debug("🔄 Periodic WebSocket URI refresh check...")
-                                    try:
-                                        await self._refresh_websocket_uri()
-                                        last_refresh_check = current_time
-                                    except Exception as refresh_err:
-                                        _LOGGER.warning("⚠️ Periodic URI refresh failed: %s", refresh_err)
-
-                                # Proactive refresh before token expires
-                                if current_time - last_proactive_refresh > proactive_refresh_interval:
-                                    _LOGGER.info("🔄 Proactive WebSocket URI refresh (3min timeout prevention)...")
-                                    try:
-                                        await self._force_refresh_websocket_uri()
-                                        last_proactive_refresh = current_time
-                                    except Exception as refresh_err:
-                                        _LOGGER.warning("⚠️ Proactive URI refresh failed: %s", refresh_err)
 
                                 if msg.type == aiohttp.WSMsgType.TEXT:
                                     last_message_time = current_time
@@ -439,11 +429,12 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                                 else:
                                     _LOGGER.debug("📋 WebSocket message type: %s", msg.type)
 
-                            # If we exit the message loop, log why
+                            # If we exit the message loop, continue the refresh cycle
                             final_time = time.time()
                             connection_duration = final_time - connection_success_time
-                            _LOGGER.warning("🔌 WebSocket message loop ended after %.2f minutes (%d messages)", 
-                                           connection_duration / 60, message_count)
+                            _LOGGER.info("� WebSocket disconnected after %.2f minutes (%d messages) - starting refresh cycle", 
+                                       connection_duration / 60, message_count)
+                            # Don't increment retry_count here - this is normal operation for 3-minute refresh
 
                 except asyncio.TimeoutError:
                     _LOGGER.error("❌ WebSocket connection timeout after 60 seconds")
@@ -632,52 +623,6 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.error("❌ Failed to force refresh WebSocket URI: %s", err, exc_info=True)
             raise
-
-    def _get_token_preview(self, uri):
-        """Get a safe preview of the WebSocket token for logging."""
-        if not uri or '?p=' not in uri:
-            return None
-        try:
-            token = uri.split('?p=')[1]
-            return f"{token[:20]}...({len(token)} chars)"
-        except Exception:
-            return "Invalid format"
-
-    async def check_websocket_health(self):
-        """Check WebSocket health and restart if needed."""
-        if not self._enable_websocket:
-            return "WebSocket disabled"
-            
-        if self._websocket_failed_permanently:
-            # Try to recover from permanent failure after some time
-            if self._last_health_check:
-                time_since_failure = time.time() - self._last_health_check
-                if time_since_failure > 1800:  # Try to recover after 30 minutes
-                    _LOGGER.info("🔄 Attempting to recover from permanent WebSocket failure after 30 minutes...")
-                    self._websocket_failed_permanently = False
-                    await self.async_restart_websocket()
-                    return "Attempting recovery from permanent failure"
-            return "WebSocket failed permanently"
-            
-        if not self._websocket_task:
-            return "No WebSocket task - restarting..."
-            
-        if self._websocket_task.done():
-            _LOGGER.warning("⚠️ WebSocket task completed unexpectedly - restarting...")
-            self._websocket_failed_permanently = False  # Reset failure flag
-            await self.async_restart_websocket()
-            return "WebSocket task was done - restarted"
-            
-        # Check if we have recent real-time data
-        if self._realtime_data_timestamps:
-            latest_timestamp = max(self._realtime_data_timestamps.values())
-            time_since_data = time.time() - latest_timestamp
-            if time_since_data > 600:  # 10 minutes
-                _LOGGER.warning("⚠️ No real-time data for %.1f minutes - WebSocket may be stale", 
-                               time_since_data / 60)
-                return f"Stale data ({time_since_data/60:.1f}m ago)"
-        
-        return "Healthy"
 
     async def _handle_realtime_data(self, data):
         """Handle real-time data updates from WebSocket."""
