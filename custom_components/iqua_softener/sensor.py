@@ -340,14 +340,6 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Manual data refresh failed: %s", err)
 
     async def _async_update_data(self) -> IquaSoftenerData:
-        # Start WebSocket after first successful data fetch (post-bootstrap)
-        if (self._enable_websocket and 
-            not self._websocket_start_delayed):
-            _LOGGER.info("Starting hybrid WebSocket after bootstrap completion...")
-            self._websocket_start_delayed = True
-            # Schedule WebSocket start as a background task to avoid blocking data fetch
-            self.hass.async_create_task(self.async_start_websocket())
-        
         try:
             data = await self.hass.async_add_executor_job(
                 lambda: self._iqua_softener.get_data()
@@ -360,6 +352,15 @@ class IquaSoftenerCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed("API returned no data")
             
             _LOGGER.info("✅ API refresh completed - sensors updating from 5-minute API data")
+            
+            # Start WebSocket after first successful data fetch (post-bootstrap)
+            if (self._enable_websocket and 
+                not self._websocket_start_delayed):
+                _LOGGER.info("Starting hybrid WebSocket after successful initial API fetch...")
+                self._websocket_start_delayed = True
+                # Schedule WebSocket start as a background task to avoid blocking data fetch
+                self.hass.async_create_task(self.async_start_websocket())
+            
             return data
         except TypeError as err:
             # Handle library authentication issues
