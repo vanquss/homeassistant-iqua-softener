@@ -5,6 +5,27 @@ All notable changes to the iQua Softener Home Assistant integration will be docu
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] - 2025-11-09
+
+### Added
+- **Configuration Flow Validation**: Added real-time credential validation during setup
+  - Credentials and device access are now validated before completing the integration setup
+  - Users cannot complete setup with invalid credentials or unreachable devices
+  - Added progress indicators during validation with user-friendly error messages
+  - Added reconfigure flow support for updating credentials
+
+### Fixed
+- **Authentication Error Handling**: Improved startup error handling to prevent platform setup failures
+  - Added proper `ConfigEntryNotReady` exception handling for authentication failures
+  - Authentication is now validated before setting up sensor and switch platforms
+  - Prevents Home Assistant platform errors when credentials are invalid or API is unavailable
+- **Date/Time Display**: Cleaned up date/time sensor format to remove microseconds
+  - Date/time sensor now displays clean format: "2025-11-09 15:30:05-07:00" instead of "2025-11-09 15:30:05.785765-07:00"
+
+### Enhanced
+- **User Experience**: Enhanced configuration flow with real-time validation and clear error messages
+- **Integration Startup**: Improved startup sequence with proper authentication validation and error reporting
+
 ## [2.0.2] - 2025-11-09
 
 ### Added
@@ -12,11 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `has_water_shutoff_valve()` method to library for proper device capability detection
   - Added `get_device_details()` public method for external access to device information
   - Enhanced device detection logic to check `is_installed` field in water shutoff valve data
-- **Configuration Flow Validation**: Added real-time credential validation during setup
-  - Credentials and device access are now validated before completing the integration setup
-  - Users cannot complete setup with invalid credentials or unreachable devices
-  - Added progress indicators during validation with user-friendly error messages
-  - Added reconfigure flow support for updating credentials
 
 ### Fixed
 - **Missing Switch Issue**: Fixed water shutoff valve switch not appearing due to product serial number handling
@@ -26,17 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated valve state parsing to respect `is_installed` field from device API response
   - Added comprehensive valve availability checking across multiple API data locations (enriched_data, properties, root level)
   - Switch and valve state sensor creation now conditional based on actual device capabilities
-- **Authentication Error Handling**: Improved startup error handling to prevent platform setup failures
-  - Added proper `ConfigEntryNotReady` exception handling for authentication failures
-  - Authentication is now validated before setting up sensor and switch platforms
-  - Prevents Home Assistant platform errors when credentials are invalid or API is unavailable
 
 ### Enhanced
 - **Better Error Handling**: Improved logging and error handling for water shutoff valve operations
 - **Device Capability Detection**: More robust detection of device features before creating entities
 - **API Response Parsing**: Enhanced parsing of device details to handle various API response formats
-- **Integration Startup**: Improved startup sequence with proper authentication validation and error reporting
-- **User Experience**: Enhanced configuration flow with real-time validation and clear error messages
 
 ## [2.0.1] - 2025-11-09
 
