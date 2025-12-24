@@ -32,6 +32,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_API_BASE_URL = "https://api.myiquaapp.com/v1"
 
 
+def _redact_url_query(url: str) -> str:
+    """Redact query string from URLs (e.g. websocket auth tokens) before logging."""
+    try:
+        qpos = url.find("?")
+        if qpos == -1:
+            return url
+        return f"{url[:qpos]}?***REDACTED***"
+    except Exception:
+        return "<redacted_url>"
+
+
 class IquaSoftenerState(str, Enum):
     ONLINE = "Online"
     OFFLINE = "Offline"
@@ -426,7 +437,7 @@ class IquaSoftener:
                     continue
 
                 full_uri = f"wss://api.myiquaapp.com{ws_uri}"
-                logger.info(f"Connecting to WebSocket: {full_uri}")
+                logger.info(f"Connecting to WebSocket: {_redact_url_query(full_uri)}")
 
                 async with websockets.connect(full_uri) as websocket:
                     logger.info("WebSocket connected successfully")

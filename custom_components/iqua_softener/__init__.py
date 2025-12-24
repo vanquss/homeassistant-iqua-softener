@@ -19,6 +19,17 @@ from .sensor import IquaSoftenerCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+_REDACT_KEYS = {CONF_PASSWORD}
+
+
+def _redact_dict(data: dict) -> dict:
+    """Return a shallow-copied dict with sensitive fields redacted for logging."""
+    redacted = dict(data)
+    for k in _REDACT_KEYS:
+        if k in redacted and redacted[k] is not None:
+            redacted[k] = "***REDACTED***"
+    return redacted
+
 
 async def async_setup_entry(
     hass: core.HomeAssistant, entry: config_entries.ConfigEntry
@@ -28,9 +39,10 @@ async def async_setup_entry(
     if entry.options:
         hass_data.update(entry.options)
 
-    _LOGGER.info("Configuration data: %s", hass_data)
-    _LOGGER.info("Entry data: %s", entry.data)
-    _LOGGER.info("Entry options: %s", entry.options)
+    # Avoid logging credentials or other secrets.
+    _LOGGER.debug("Configuration data: %s", _redact_dict(hass_data))
+    _LOGGER.debug("Entry data: %s", _redact_dict(dict(entry.data)))
+    _LOGGER.debug("Entry options: %s", _redact_dict(dict(entry.options)))
 
     # Create shared coordinator
     update_interval_minutes = hass_data.get(
